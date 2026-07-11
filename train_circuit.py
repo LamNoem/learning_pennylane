@@ -6,6 +6,7 @@ from pennylane import numpy as np
 
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import balanced_accuracy_score
+from pathlib import Path
 
 
 #### dataset ####
@@ -29,7 +30,7 @@ X = train_df[feature_cols].values
 #  [-0.35297954 -1.69228655 -1.19470034 ... -0.3190028   0.06343364
 #    0.34224323]]
 y = train_df["label"].values
-print(y)
+# print(y)
 # [0 0 0 ... 0 0 0]
 
 #data has 8 input features: x1, x2, x3, x4, x5, x6, x7, x8
@@ -49,6 +50,20 @@ X_train, X_val, y_train, y_val = train_test_split(
 #### Create the quantum device ####
 num_qubits = 8
 num_layers = 4
+entangler = "chain"
+measured_qubit = 0 # only one qubit can be measured, competition rule
+reupload_data = True
+seed=0
+
+n0_train = onp.sum(y_train == 0)
+n1_train = onp.sum(y_train == 1)
+total_train = len(y_train)
+
+class_weight_0 = total_train / (2 * n0_train)
+class_weight_1 = total_train / (2 * n1_train)
+
+print("Class weight 0:", class_weight_0)
+print("Class weight 1:", class_weight_1)
 
 dev = qml.device("default.qubit", wires=num_qubits)
 #We use 8 qubits because there are 8 features
@@ -66,6 +81,20 @@ def encode_data(x):
 #This is direct encoding. No scaling. No normalization. No PCA. No get_angles.
 
 ### Define trainable layer ###
+
+def apply_entanglement():
+    if entangler == "chain":
+        for i in range(num_qubits - 1):
+            qml.CNOT(wires=[i, i + 1])
+
+    elif entangler == "brickwork":
+        for i in range(0, num_qubits - 1, 2):
+            qml.CNOT(wires=[i, i + 1])
+
+        for i in range(1, num_qubits - 1, 2):
+            qml.CNOT(wires=[i, i + 1])
+            
+
 def trainable_layer(layer_weights):
     # Trainable single-qubit gates
     for i in range(num_qubits):
@@ -77,10 +106,7 @@ def trainable_layer(layer_weights):
     
 
     # Entangling gates
-    for i in range(num_qubits - 1):
-        # qubits are connected using a chain of CNOTs:
-        # q0 → q1 → q2 → q3 → q4 → q5 → q6 → q7
-        qml.CNOT(wires=[i, i + 1])
+    apply_entanglement()
 
     #uses 7 two qubit gates per layer 
     # with 4 layers
@@ -90,17 +116,22 @@ def trainable_layer(layer_weights):
 
 @qml.qnode(dev, interface="autograd")
 def circuit(weights, bias, x):
+    ##encode_data(x), option to only encode data once.
+    if not reupload_data:
+        encode_data(x)
+
     for layer_id in range(num_layers):
-        encode_data(x) # each layer gets the freshly encoded data?
+        if reupload_data:
+            encode_data(x) # each layer gets the freshly encoded data
         trainable_layer(weights[layer_id])
 
     # In-circuit bias instead of classical + bias
-    qml.RY(bias, wires=0)
+    qml.RY(bias, wires=measured_qubit)
 
     #for qubit 0
     # PauliZ expectation near +1 → likely measured as 0
     #PauliZ expectation near -1 → likely measured as 1 why ?
-    return qml.expval(qml.PauliZ(0))
+    return qml.expval(qml.PauliZ(measured_qubit))
 
 
 ###Convert the measured value into class probability##
@@ -121,14 +152,11 @@ def weighted_bce_loss(weights, bias, X_batch, y_batch):
 
     eps = 1e-7
 
-    n0 = np.sum(y_batch == 0)
-    n1 = np.sum(y_batch == 1)
-    total = len(y_batch)
-
-    w0 = total / (2 * n0 + eps)
-    w1 = total / (2 * n1 + eps)
-
-    sample_weights = np.where(y_batch == 1, w1, w0)
+    sample_weights = np.where(
+        y_batch == 1,
+        class_weight_1,
+        class_weight_0
+    )
 
     loss = -np.mean(
         sample_weights * (
@@ -158,7 +186,7 @@ def validation_balanced_accuracy(weights, bias):
 # Plus one final bias rotation:
 # 64 + 1 = 65 parameters
 
-onp.random.seed(0)
+onp.random.seed(seed)
 
 weights = 0.01 * np.array(
     onp.random.randn(num_layers, num_qubits, 2),
@@ -168,16 +196,20 @@ weights = 0.01 * np.array(
 bias = np.array(0.0, requires_grad=True)
 
 ###Train the model ###
-opt = qml.AdamOptimizer(stepsize=0.03)
+lr = 0.03
+opt = qml.AdamOptimizer(stepsize=lr) #try 0.01, 0.03, 0.05
 
-batch_size = 64
-num_epochs = 100
+batch_size = 32 #64 #128
+num_epochs = 200
+
+patience = 50
+epochs_without_improvement = 0
 
 best_bal_acc = 0
 best_weights = None
 best_bias = None
 
-rng = onp.random.default_rng(0)
+rng = onp.random.default_rng(seed)
 
 for epoch in range(num_epochs):
     batch_idx = rng.choice(len(X_train), size=batch_size, replace=False)
@@ -203,9 +235,20 @@ for epoch in range(num_epochs):
             best_bal_acc = val_bal_acc
             best_weights = weights.copy()
             best_bias = bias.copy()
+            epochs_without_improvement = 0
+        else:
+            epochs_without_improvement += 5
+
+        if epochs_without_improvement >= patience:
+            print("Early stopping.")
+            break
+
+        
 
 
 ##### TEST #####
+if best_weights is None or best_bias is None:
+    raise RuntimeError("Training finished without saving a best model.")
 X_public = test_df[feature_cols].values
 y_public = test_df["label"].values
 
@@ -245,89 +288,303 @@ with open("weights.json", "w") as f:
 # ...
 # theta_64
 
+expected_num_params = num_layers * num_qubits * 2 + 1
+
+assert len(weights_json) == expected_num_params, (
+    f"weights.json has {len(weights_json)} parameters, "
+    f"but expected {expected_num_params}"
+)
+
+assert list(weights_json.keys()) == [
+    f"theta_{i}" for i in range(expected_num_params)
+], "theta keys are not sequential"
+
+print("weights.json parameter count OK:", expected_num_params)
+
 #### Translate the circuit into QASM #### 
 
 #Encode x1...x8 directly as RY angles on 8 qubits → apply 4 layers of trainable RY/RZ gates plus CNOT entanglement → measure q[0] → train theta_0...theta_64 using training data only → submit QASM plus weights.json.
 # Each row has eight raw features x1...x8. I encode them directly as rotation angles using RY(x_i) on qubit i, with no scaling, normalization, feature engineering, PCA, or data augmentation. The same direct encoding is repeated in each data re-uploading layer.
 
-def generate_classifier_qasm(
-    filename="classifier.qasm",
+
+
+#### evaluation with 1024 shots ########
+shot_dev = qml.device("default.qubit", wires=num_qubits, shots=1024)
+
+
+@qml.qnode(shot_dev)
+def circuit_1024(weights, bias, x):
+    if not reupload_data:
+        encode_data(x)
+
+    for layer_id in range(num_layers):
+        if reupload_data:
+            encode_data(x)
+
+    qml.RY(bias, wires=measured_qubit)
+
+    return qml.probs(wires=measured_qubit)
+
+def predict_1024(weights, bias, X_data):
+    probs_class_1 = []
+
+    for x in X_data:
+        probs = circuit_1024(weights, bias, x)
+        probs_class_1.append(float(probs[1]))
+
+    probs_class_1 = onp.array(probs_class_1)
+
+    return (probs_class_1 >= 0.5).astype(int)
+
+
+public_preds_1024 = predict_1024(best_weights, best_bias, X_public)
+public_bal_acc_1024 = balanced_accuracy_score(y_public, public_preds_1024)
+
+print("Public test balanced accuracy with 1024 shots:", public_bal_acc_1024)
+
+
+# lr,bs,epochs,layers,entanglement,qubit measured,seed,val_bacc,test_bacc, 1024 bacc
+results_path = Path("results_c1.csv")
+tunings = [
+    lr,
+    batch_size,
+    epoch + 1,
+    num_layers,
+    entangler,
+    measured_qubit,
+    seed,
+    best_bal_acc,
+    public_bal_acc,
+    public_bal_acc_1024
+]
+header = [
+    "lr",
+    "batch_size",
+    "epochs_run",
+    "num_layers",
+    "entanglement",
+    "measured_qubit",
+    "seed",
+    "best_val_bal_acc",
+    "public_bal_acc_exact",
+    "public_bal_acc_1024"
+]
+
+write_header = not results_path.exists()
+import csv
+with open(results_path, mode="a", newline="", encoding="utf-8") as file:
+    writer = csv.writer(file)
+
+    if write_header:
+        writer.writerow(header)
+
+    writer.writerow(tunings)
+
+from qiskit import QuantumCircuit
+from qiskit.circuit import Parameter
+from qiskit import qasm3
+
+
+def build_qiskit_classifier(
     num_qubits=8,
-    num_layers=4
+    num_layers=4,
+    measured_qubit=0,
+    entangler="chain",      # "chain" or "brickwork"
+    reupload_data=True      # True = encode x in every layer
 ):
-    lines = []
+    """
+    Builds the same classifier architecture in Qiskit so we can export OpenQASM 3.0.
 
-    lines.append("OPENQASM 3.0;")
-    lines.append('include "stdgates.inc";')
-    lines.append("")
+    Important:
+    - This must match your PennyLane training circuit exactly.
+    - If you train with chain entanglement, export with entangler="chain".
+    - If you train with brickwork entanglement, export with entangler="brickwork".
+    """
 
-    # Data input placeholders
-    # These represent x1...x8 from each row of the dataset.
-    for i in range(num_qubits):
-        lines.append(f"input float[64] x_{i};")
+    if num_qubits > 8:
+        raise ValueError("Competition rule violation: maximum number of qubits is 8.")
 
-    lines.append("")
+    if measured_qubit < 0 or measured_qubit >= num_qubits:
+        raise ValueError("Measured qubit index is invalid.")
 
-    # Trainable parameter placeholders
-    # For 4 layers, 8 qubits, 2 trainable gates per qubit:
-    # (num layers)(weights or params per layer) + final bias or weight = 65
-    # 4 * 8 * 2 = 64
-    # plus one final bias parameter = 65
-    num_trainable_params = num_layers * num_qubits * 2 + 1
+    if entangler not in ["chain", "brickwork"]:
+        raise ValueError("entangler must be either 'chain' or 'brickwork'.")
 
-    for i in range(num_trainable_params):
-        lines.append(f"input float[64] theta_{i};")
+    # One classical bit because the competition allows 1-qubit measurement.
+    qc = QuantumCircuit(num_qubits, 1)
 
-    lines.append("")
-    lines.append(f"qubit[{num_qubits}] q;")
-    lines.append("bit result;")
-    lines.append("")
+    # Data placeholders: x_0, x_1, ..., x_7
+    # These represent the raw features x1...x8.
+    x = [Parameter(f"x_{i}") for i in range(num_qubits)]
+
+    # Trainable parameters:
+    # Each layer has 8 qubits * 2 trainable rotations = 16 parameters.
+    # Plus one final trainable bias rotation.
+    num_theta = num_layers * num_qubits * 2 + 1
+    theta = [Parameter(f"theta_{i}") for i in range(num_theta)]
 
     theta_index = 0
 
+    # If reupload_data=False, encode data once at the beginning.
+    if not reupload_data:
+        for q in range(num_qubits):
+            qc.ry(x[q], q)
+
     for layer in range(num_layers):
-        lines.append(f"// Layer {layer + 1}: direct data encoding")
 
-        # Direct data encoding
-        for qubit in range(num_qubits):
-            lines.append(f"ry(x_{qubit}) q[{qubit}];")
+        # Direct data encoding.
+        # If reupload_data=True, we encode the same raw x values in every layer.
+        if reupload_data:
+            for q in range(num_qubits):
+                qc.ry(x[q], q)
 
-        lines.append(f"// Layer {layer + 1}: trainable rotations")
-
-        # Trainable single-qubit gates
-        for qubit in range(num_qubits):
-            lines.append(f"ry(theta_{theta_index}) q[{qubit}];")
+        # Trainable single-qubit rotations.
+        # This matches your PennyLane code:
+        # qml.RY(layer_weights[i, 0])
+        # qml.RZ(layer_weights[i, 1])
+        for q in range(num_qubits):
+            qc.ry(theta[theta_index], q)
             theta_index += 1
 
-            lines.append(f"rz(theta_{theta_index}) q[{qubit}];")
+            qc.rz(theta[theta_index], q)
             theta_index += 1
 
-        lines.append(f"// Layer {layer + 1}: entanglement")
+        # Entanglement pattern.
+        if entangler == "chain":
+            # CX q0,q1
+            # CX q1,q2
+            # ...
+            # CX q6,q7
+            for q in range(num_qubits - 1):
+                qc.cx(q, q + 1)
 
-        # CNOT chain
-        for qubit in range(num_qubits - 1):
-            lines.append(f"cx q[{qubit}], q[{qubit + 1}];")
+        elif entangler == "brickwork":
+            # First parallel group:
+            # CX 0-1, 2-3, 4-5, 6-7
+            for q in range(0, num_qubits - 1, 2):
+                qc.cx(q, q + 1)
 
-        lines.append("")
+            # Second parallel group:
+            # CX 1-2, 3-4, 5-6
+            for q in range(1, num_qubits - 1, 2):
+                qc.cx(q, q + 1)
 
-    # Final trainable bias rotation on measured qubit q[0]
-    lines.append("// Final trainable bias rotation")
-    lines.append(f"ry(theta_{theta_index}) q[0];")
-    lines.append("")
+    # Final trainable bias rotation on the measured qubit.
+    qc.ry(theta[theta_index], measured_qubit)
 
-    # One-qubit measurement
-    lines.append("// Measure one qubit")
-    lines.append("result = measure q[0];")
-    lines.append("")
+    # Measure exactly one qubit into exactly one classical bit.
+    qc.measure(measured_qubit, 0)
 
-    qasm_text = "\n".join(lines)
+    return qc, theta, x
+
+def check_competition_constraints(qc, max_depth=50, max_two_qubit_gates=80):
+    """
+    Checks the competition constraints:
+    - <= 8 qubits
+    - depth <= 50
+    - two-qubit gates <= 80
+    - allowed gates only
+    - one measured qubit
+    """
+
+    allowed_ops = {
+        "x", "y", "z",
+        "h", "s", "t",
+        "rx", "ry", "rz",
+        "cx", "cz",
+        "measure"
+    }
+
+    ops = qc.count_ops()
+    used_ops = set(ops.keys())
+
+    bad_ops = used_ops - allowed_ops
+    if bad_ops:
+        raise ValueError(f"Competition rule violation: forbidden gates found: {bad_ops}")
+
+    if qc.num_qubits > 8:
+        raise ValueError(f"Competition rule violation: {qc.num_qubits} qubits used, max is 8.")
+
+    two_qubit_count = 0
+    measurement_count = 0
+
+    for instruction in qc.data:
+        op_name = instruction.operation.name
+        num_qargs = len(instruction.qubits)
+
+        if op_name in {"cx", "cz"}:
+            two_qubit_count += 1
+
+        if op_name == "measure":
+            measurement_count += 1
+
+        if num_qargs == 2 and op_name not in {"cx", "cz"}:
+            raise ValueError(f"Competition rule violation: unsupported two-qubit gate {op_name}")
+
+    if two_qubit_count > max_two_qubit_gates:
+        raise ValueError(
+            f"Competition rule violation: {two_qubit_count} two-qubit gates used, "
+            f"max is {max_two_qubit_gates}."
+        )
+
+    if measurement_count != 1:
+        raise ValueError(
+            f"Competition rule violation: {measurement_count} measurements found. "
+            "Only one measured qubit is allowed."
+        )
+
+    depth = qc.depth()
+
+    if depth > max_depth:
+        raise ValueError(
+            f"Competition rule violation: circuit depth is {depth}, max is {max_depth}."
+        )
+
+    print("Circuit passes basic competition checks.")
+    print("Qubits:", qc.num_qubits)
+    print("Depth:", depth)
+    print("Two-qubit gates:", two_qubit_count)
+    print("Gate counts:", dict(ops))
+
+def save_classifier_qasm(
+    filename="classifier.qasm",
+    num_qubits=8,
+    num_layers=4,
+    measured_qubit=0,
+    entangler="chain",
+    reupload_data=True
+):
+    qc, theta, x = build_qiskit_classifier(
+        num_qubits=num_qubits,
+        num_layers=num_layers,
+        measured_qubit=measured_qubit,
+        entangler=entangler,
+        reupload_data=reupload_data
+    )
+
+    check_competition_constraints(qc)
+
+    qasm_text = qasm3.dumps(qc)
 
     with open(filename, "w") as f:
         f.write(qasm_text)
 
     print(f"Saved {filename}")
-    print(f"Number of trainable parameters: {num_trainable_params}")
-    print(f"Last theta used: theta_{theta_index}")
+    print(f"Measured qubit index: {measured_qubit}")
+    print(f"Number of theta parameters: {len(theta)}")
+    print(f"Expected weights.json keys: theta_0 through theta_{len(theta) - 1}")
+
+    return qc, qasm_text
 
 
-generate_classifier_qasm()
+
+
+
+qc, qasm_text = save_classifier_qasm(
+    filename="classifier.qasm",
+    num_qubits=num_qubits,
+    num_layers=num_layers,
+    measured_qubit=measured_qubit,
+    entangler=entangler,
+    reupload_data=reupload_data
+)

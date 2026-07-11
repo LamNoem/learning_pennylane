@@ -1,0 +1,15 @@
+train while increasing layers until comp gate limit reached
+
+
+change entanglement pattern brickword ->less depth apparently
+
+change method of class weighting, understand it
+
+remember to try different seeds
+
+
+vary which qubit u use as final meaurement
+
+
+
+results:
