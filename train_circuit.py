@@ -49,11 +49,12 @@ X_train, X_val, y_train, y_val = train_test_split(
 
 #### Create the quantum device ####
 num_qubits = 8
-num_layers = 4
-entangler = "chain"
-measured_qubit = 0 # only one qubit can be measured, competition rule
+num_layers = 5
+entangler = "brickwork_alternating" # "chain" or "brickwork" or "chain_alternating" or "brickwork_alternating"
+measured_qubit = 1 # only one qubit can be measured, competition rule
 reupload_data = True
 seed=0
+num_rotational_gates_per_qubit = 3 #RY and RZ, optional RX
 
 n0_train = onp.sum(y_train == 0)
 n1_train = onp.sum(y_train == 1)
@@ -82,7 +83,7 @@ def encode_data(x):
 
 ### Define trainable layer ###
 
-def apply_entanglement():
+def apply_entanglement(layer_id):
     if entangler == "chain":
         for i in range(num_qubits - 1):
             qml.CNOT(wires=[i, i + 1])
@@ -93,20 +94,50 @@ def apply_entanglement():
 
         for i in range(1, num_qubits - 1, 2):
             qml.CNOT(wires=[i, i + 1])
-            
+    elif entangler == "chain_alternating":
+        if layer_id % 2 == 0:
+            for i in range(num_qubits - 1):
+                qml.CNOT(wires=[i, i + 1])
+        else:
+            for i in reversed(range(num_qubits - 1)):
+                qml.CNOT(wires=[i + 1, i])
 
-def trainable_layer(layer_weights):
+    elif entangler == "brickwork_alternating":
+        if layer_id % 2 == 0:
+            for i in range(0, num_qubits - 1, 2):
+                qml.CNOT(wires=[i, i + 1])
+
+            for i in range(1, num_qubits - 1, 2):
+                qml.CNOT(wires=[i, i + 1])
+        else:
+            # Odd layers: right-to-left brickwork
+            for i in reversed(range(1, num_qubits - 1, 2)):
+                qml.CNOT(wires=[i + 1, i])
+
+            for i in reversed(range(0, num_qubits - 1, 2)):
+                qml.CNOT(wires=[i + 1, i])
+    else:
+        raise ValueError(f"Unknown entangler: {entangler}")
+
+def trainable_layer(layer_weights, layer_id):
     # Trainable single-qubit gates
     for i in range(num_qubits):
+        if num_rotational_gates_per_qubit < 2:
+            raise ValueError("num_rotational_gates_per_qubit must be at least 2.")
+        if num_rotational_gates_per_qubit > 3:
+            raise ValueError("num_rotational_gates_per_qubit must be at most 3.")
+        
         # each qubit gets two trainable gates
         # RY(theta)
         # RZ(theta)
         qml.RY(layer_weights[i, 0], wires=i)
         qml.RZ(layer_weights[i, 1], wires=i)
+        if  num_rotational_gates_per_qubit == 3:
+            qml.RX(layer_weights[i, 2], wires=i)  # optional RX gate
     
 
     # Entangling gates
-    apply_entanglement()
+    apply_entanglement(layer_id)
 
     #uses 7 two qubit gates per layer 
     # with 4 layers
@@ -123,7 +154,7 @@ def circuit(weights, bias, x):
     for layer_id in range(num_layers):
         if reupload_data:
             encode_data(x) # each layer gets the freshly encoded data
-        trainable_layer(weights[layer_id])
+        trainable_layer(weights[layer_id], layer_id)
 
     # In-circuit bias instead of classical + bias
     qml.RY(bias, wires=measured_qubit)
@@ -189,20 +220,20 @@ def validation_balanced_accuracy(weights, bias):
 onp.random.seed(seed)
 
 weights = 0.01 * np.array(
-    onp.random.randn(num_layers, num_qubits, 2),
+    onp.random.randn(num_layers, num_qubits, num_rotational_gates_per_qubit),
     requires_grad=True
 )
 
 bias = np.array(0.0, requires_grad=True)
 
 ###Train the model ###
-lr = 0.03
+lr = 0.02
 opt = qml.AdamOptimizer(stepsize=lr) #try 0.01, 0.03, 0.05
 
-batch_size = 32 #64 #128
+batch_size = 64 #64 #128 #32
 num_epochs = 200
 
-patience = 50
+patience = 40
 epochs_without_improvement = 0
 
 best_bal_acc = 0
@@ -267,8 +298,10 @@ flat_params = []
 
 for layer_id in range(num_layers):
     for qubit_id in range(num_qubits):
-        flat_params.append(float(best_weights[layer_id, qubit_id, 0]))
-        flat_params.append(float(best_weights[layer_id, qubit_id, 1]))
+        for gate_id in range(num_rotational_gates_per_qubit):
+            flat_params.append(
+                float(best_weights[layer_id, qubit_id, gate_id])
+            )
 
 flat_params.append(float(best_bias))
 
@@ -288,7 +321,7 @@ with open("weights.json", "w") as f:
 # ...
 # theta_64
 
-expected_num_params = num_layers * num_qubits * 2 + 1
+expected_num_params = num_layers * num_qubits * num_rotational_gates_per_qubit + 1
 
 assert len(weights_json) == expected_num_params, (
     f"weights.json has {len(weights_json)} parameters, "
@@ -309,10 +342,10 @@ print("weights.json parameter count OK:", expected_num_params)
 
 
 #### evaluation with 1024 shots ########
-shot_dev = qml.device("default.qubit", wires=num_qubits, shots=1024)
+shot_dev = qml.device("default.qubit", wires=num_qubits)
 
 
-@qml.qnode(shot_dev)
+@qml.qnode(shot_dev, shots=1024)
 def circuit_1024(weights, bias, x):
     if not reupload_data:
         encode_data(x)
@@ -320,6 +353,8 @@ def circuit_1024(weights, bias, x):
     for layer_id in range(num_layers):
         if reupload_data:
             encode_data(x)
+
+        trainable_layer(weights[layer_id], layer_id)
 
     qml.RY(bias, wires=measured_qubit)
 
@@ -353,6 +388,7 @@ tunings = [
     entangler,
     measured_qubit,
     seed,
+    num_rotational_gates_per_qubit,
     best_bal_acc,
     public_bal_acc,
     public_bal_acc_1024
@@ -365,6 +401,7 @@ header = [
     "entanglement",
     "measured_qubit",
     "seed",
+    "num_train_rot_per_qubit",
     "best_val_bal_acc",
     "public_bal_acc_exact",
     "public_bal_acc_1024"
@@ -407,8 +444,8 @@ def build_qiskit_classifier(
     if measured_qubit < 0 or measured_qubit >= num_qubits:
         raise ValueError("Measured qubit index is invalid.")
 
-    if entangler not in ["chain", "brickwork"]:
-        raise ValueError("entangler must be either 'chain' or 'brickwork'.")
+    if entangler not in ["chain", "brickwork", "chain_alternating", "brickwork_alternating"]:
+        raise ValueError("entangler must be either 'chain' or 'brickwork' or 'chain_alternating' or 'brickwork_alternating'.")
 
     # One classical bit because the competition allows 1-qubit measurement.
     qc = QuantumCircuit(num_qubits, 1)
@@ -420,7 +457,7 @@ def build_qiskit_classifier(
     # Trainable parameters:
     # Each layer has 8 qubits * 2 trainable rotations = 16 parameters.
     # Plus one final trainable bias rotation.
-    num_theta = num_layers * num_qubits * 2 + 1
+    num_theta = num_layers * num_qubits * num_rotational_gates_per_qubit + 1
     theta = [Parameter(f"theta_{i}") for i in range(num_theta)]
 
     theta_index = 0
@@ -449,25 +486,70 @@ def build_qiskit_classifier(
             qc.rz(theta[theta_index], q)
             theta_index += 1
 
+            if num_rotational_gates_per_qubit == 3:
+                qc.rx(theta[theta_index], q)
+                theta_index += 1
+
+
         # Entanglement pattern.
         if entangler == "chain":
-            # CX q0,q1
-            # CX q1,q2
-            # ...
-            # CX q6,q7
+            # Forward chain:
+            # CX 0->1, 1->2, ..., 6->7
             for q in range(num_qubits - 1):
                 qc.cx(q, q + 1)
 
         elif entangler == "brickwork":
             # First parallel group:
-            # CX 0-1, 2-3, 4-5, 6-7
+            # CX 0->1, 2->3, 4->5, 6->7
             for q in range(0, num_qubits - 1, 2):
                 qc.cx(q, q + 1)
 
             # Second parallel group:
-            # CX 1-2, 3-4, 5-6
+            # CX 1->2, 3->4, 5->6
             for q in range(1, num_qubits - 1, 2):
                 qc.cx(q, q + 1)
+
+        elif entangler == "chain_alternating":
+            if layer % 2 == 0:
+                # Even layers: forward chain
+                # CX 0->1, 1->2, ..., 6->7
+                for q in range(num_qubits - 1):
+                    qc.cx(q, q + 1)
+            else:
+                # Odd layers: reverse chain
+                # CX 7->6, 6->5, ..., 1->0
+                for q in reversed(range(num_qubits - 1)):
+                    qc.cx(q + 1, q)
+
+        elif entangler == "brickwork_alternating":
+            if layer % 2 == 0:
+                # Even layers: forward brickwork
+
+                # First parallel group:
+                # CX 0->1, 2->3, 4->5, 6->7
+                for q in range(0, num_qubits - 1, 2):
+                    qc.cx(q, q + 1)
+
+                # Second parallel group:
+                # CX 1->2, 3->4, 5->6
+                for q in range(1, num_qubits - 1, 2):
+                    qc.cx(q, q + 1)
+
+            else:
+                # Odd layers: reverse brickwork
+
+                # First reverse group:
+                # CX 6->5, 4->3, 2->1
+                for q in reversed(range(1, num_qubits - 1, 2)):
+                    qc.cx(q + 1, q)
+
+                # Second reverse group:
+                # CX 7->6, 5->4, 3->2, 1->0
+                for q in reversed(range(0, num_qubits - 1, 2)):
+                    qc.cx(q + 1, q)
+
+        else:
+            raise ValueError(f"Unknown entangler: {entangler}")
 
     # Final trainable bias rotation on the measured qubit.
     qc.ry(theta[theta_index], measured_qubit)
@@ -588,3 +670,5 @@ qc, qasm_text = save_classifier_qasm(
     entangler=entangler,
     reupload_data=reupload_data
 )
+
+# print(qc.draw(output="text"))

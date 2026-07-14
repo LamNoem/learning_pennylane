@@ -1,9 +1,3 @@
-train while increasing layers until comp gate limit reached
-
-
-change entanglement pattern brickword ->less depth apparently
-
-change method of class weighting, understand it
 
 remember to try different seeds
 
@@ -11,5 +5,7 @@ remember to try different seeds
 vary which qubit u use as final meaurement
 
 
+todo: (look at last two chats with tuning orders) and do that and save results
 
-results:
+
+find most promising archs, then try diff seeds and qubit measures for those
