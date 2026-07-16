@@ -9,3 +9,11 @@ todo: (look at last two chats with tuning orders) and do that and save results
 
 
 find most promising archs, then try diff seeds and qubit measures for those
+
+change one at a time: then combine best
+cz
+x measurement_basis
+initial_h
+encoding mode
+
+explore other gates

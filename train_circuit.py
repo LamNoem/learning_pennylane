@@ -50,11 +50,16 @@ X_train, X_val, y_train, y_val = train_test_split(
 #### Create the quantum device ####
 num_qubits = 8
 num_layers = 5
-entangler = "brickwork_alternating" # "chain" or "brickwork" or "chain_alternating" or "brickwork_alternating"
-measured_qubit = 1 # only one qubit can be measured, competition rule
+entangler = "cz_brickwork_alternating" # "chain" or "brickwork" or "chain_alternating" or "brickwork_alternating" or "cz_brickwork_alternating"
+measured_qubit = 0 # only one qubit can be measured, competition rule
 reupload_data = True
 seed=0
+encoding_mode = "RY" 
+rotation_order = "RY_RZ_RX"  # current
 num_rotational_gates_per_qubit = 3 #RY and RZ, optional RX
+use_initial_h = False
+measurement_basis = "Z"  # Z was the original choice
+# measurement_basis = "X"
 
 n0_train = onp.sum(y_train == 0)
 n1_train = onp.sum(y_train == 1)
@@ -70,17 +75,42 @@ dev = qml.device("default.qubit", wires=num_qubits)
 #We use 8 qubits because there are 8 features
 
 ### Encode the data directly### 
+
+
 def encode_data(x):
-    # x1 → RY(x1) on qubit 0
-    # x2 → RY(x2) on qubit 1
-    # x3 → RY(x3) on qubit 2
-    # ...
-    # x8 → RY(x8) on qubit 7
     for i in range(num_qubits):
-        qml.RY(x[i], wires=i)
+        if encoding_mode == "RY":
+            qml.RY(x[i], wires=i)
+
+        elif encoding_mode == "RY_RZ":
+            qml.RY(x[i], wires=i)
+            qml.RZ(x[i], wires=i)
+
+        elif encoding_mode == "RX_RY_RZ":
+            qml.RX(x[i], wires=i)
+            qml.RY(x[i], wires=i)
+            qml.RZ(x[i], wires=i)
+
+        else:
+            raise ValueError(f"Unknown encoding_mode: {encoding_mode}")
 
 #This is direct encoding. No scaling. No normalization. No PCA. No get_angles.
 
+
+# can be used before encoding, This starts every qubit in a superposition before data encoding.
+def apply_initial_layer():
+    if use_initial_h:
+        for i in range(num_qubits):
+            qml.Hadamard(wires=i)
+
+
+def apply_measurement_basis():
+    if measurement_basis == "Z":
+        pass
+    elif measurement_basis == "X":
+        qml.Hadamard(wires=measured_qubit)
+    else:
+        raise ValueError(f"Unknown measurement_basis: {measurement_basis}")
 ### Define trainable layer ###
 
 def apply_entanglement(layer_id):
@@ -116,24 +146,47 @@ def apply_entanglement(layer_id):
 
             for i in reversed(range(0, num_qubits - 1, 2)):
                 qml.CNOT(wires=[i + 1, i])
+    elif entangler == "cz_brickwork_alternating":
+        if layer_id % 2 == 0:
+            for i in range(0, num_qubits - 1, 2):
+                qml.CZ(wires=[i, i + 1])
+
+            for i in range(1, num_qubits - 1, 2):
+                qml.CZ(wires=[i, i + 1])
+        else:
+            # Odd layers: right-to-left brickwork
+            for i in reversed(range(1, num_qubits - 1, 2)):
+                qml.CZ(wires=[i + 1, i])
+
+            for i in reversed(range(0, num_qubits - 1, 2)):
+                qml.CZ(wires=[i + 1, i])
     else:
         raise ValueError(f"Unknown entangler: {entangler}")
 
 def trainable_layer(layer_weights, layer_id):
     # Trainable single-qubit gates
     for i in range(num_qubits):
-        if num_rotational_gates_per_qubit < 2:
-            raise ValueError("num_rotational_gates_per_qubit must be at least 2.")
-        if num_rotational_gates_per_qubit > 3:
-            raise ValueError("num_rotational_gates_per_qubit must be at most 3.")
-        
-        # each qubit gets two trainable gates
-        # RY(theta)
-        # RZ(theta)
-        qml.RY(layer_weights[i, 0], wires=i)
-        qml.RZ(layer_weights[i, 1], wires=i)
-        if  num_rotational_gates_per_qubit == 3:
-            qml.RX(layer_weights[i, 2], wires=i)  # optional RX gate
+        if rotation_order == "RY_RZ":
+            qml.RY(layer_weights[i, 0], wires=i)
+            qml.RZ(layer_weights[i, 1], wires=i)
+
+        elif rotation_order == "RY_RZ_RX":
+            qml.RY(layer_weights[i, 0], wires=i)
+            qml.RZ(layer_weights[i, 1], wires=i)
+            qml.RX(layer_weights[i, 2], wires=i)
+
+        elif rotation_order == "RX_RY_RZ":
+            qml.RX(layer_weights[i, 0], wires=i)
+            qml.RY(layer_weights[i, 1], wires=i)
+            qml.RZ(layer_weights[i, 2], wires=i)
+
+        elif rotation_order == "RZ_RY_RX":
+            qml.RZ(layer_weights[i, 0], wires=i)
+            qml.RY(layer_weights[i, 1], wires=i)
+            qml.RX(layer_weights[i, 2], wires=i)
+
+        else:
+            raise ValueError(f"Unknown rotation_order: {rotation_order}")
     
 
     # Entangling gates
@@ -147,6 +200,7 @@ def trainable_layer(layer_weights, layer_id):
 
 @qml.qnode(dev, interface="autograd")
 def circuit(weights, bias, x):
+    apply_initial_layer()
     ##encode_data(x), option to only encode data once.
     if not reupload_data:
         encode_data(x)
@@ -162,6 +216,7 @@ def circuit(weights, bias, x):
     #for qubit 0
     # PauliZ expectation near +1 → likely measured as 0
     #PauliZ expectation near -1 → likely measured as 1 why ?
+    apply_measurement_basis()
     return qml.expval(qml.PauliZ(measured_qubit))
 
 
@@ -228,12 +283,12 @@ bias = np.array(0.0, requires_grad=True)
 
 ###Train the model ###
 lr = 0.02
-opt = qml.AdamOptimizer(stepsize=lr) #try 0.01, 0.03, 0.05
+opt = qml.AdamOptimizer(stepsize=lr) #try 0.01, 0.02, 0.03, 0.05
 
 batch_size = 64 #64 #128 #32
-num_epochs = 200
+num_epochs = 150
 
-patience = 40
+patience = 50
 epochs_without_improvement = 0
 
 best_bal_acc = 0
@@ -274,7 +329,6 @@ for epoch in range(num_epochs):
             print("Early stopping.")
             break
 
-        
 
 
 ##### TEST #####
@@ -388,10 +442,13 @@ tunings = [
     entangler,
     measured_qubit,
     seed,
-    num_rotational_gates_per_qubit,
+    rotation_order,
     best_bal_acc,
     public_bal_acc,
-    public_bal_acc_1024
+    public_bal_acc_1024,
+    encoding_mode,
+    use_initial_h,
+    measurement_basis
 ]
 header = [
     "lr",
@@ -401,10 +458,13 @@ header = [
     "entanglement",
     "measured_qubit",
     "seed",
-    "num_train_rot_per_qubit",
+    "rotation_order",
     "best_val_bal_acc",
     "public_bal_acc_exact",
-    "public_bal_acc_1024"
+    "public_bal_acc_1024",
+    "encoding_mode",
+    "initial_h",
+    "measurement_basis"
 ]
 
 write_header = not results_path.exists()
@@ -464,6 +524,7 @@ def build_qiskit_classifier(
 
     # If reupload_data=False, encode data once at the beginning.
     if not reupload_data:
+        # todo: check if encoding_mode is RX_RY_RZ, RY_RZ, or RY, and apply the corresponding rotations.
         for q in range(num_qubits):
             qc.ry(x[q], q)
 
@@ -472,6 +533,7 @@ def build_qiskit_classifier(
         # Direct data encoding.
         # If reupload_data=True, we encode the same raw x values in every layer.
         if reupload_data:
+            # todo: check if encoding_mode is RX_RY_RZ, RY_RZ, or RY, and apply the corresponding rotations.
             for q in range(num_qubits):
                 qc.ry(x[q], q)
 
