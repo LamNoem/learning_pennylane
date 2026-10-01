@@ -1,0 +1,1 @@
+Each raw CSV feature is used directly with no preprocessing: CSV x1..x8 correspond to symbolic x_0..x_7, and each x_i is inserted directly as an RY rotation angle before every variational block. Mapping: x_0->q0, x_1->q1, x_2->q2, x_3->q3, x_4->q4, x_5->q5, x_6->q6, x_7->q7.

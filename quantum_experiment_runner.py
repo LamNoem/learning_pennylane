@@ -95,6 +95,8 @@ ALLOWED_OPS = {
 # Trainable rotation orders. The order here determines the theta order.
 ROTATION_ORDERS: Dict[str, Tuple[str, ...]] = {
     "RY_RZ": ("ry", "rz"),
+    "RX_RZ": ("rx, rz"),
+    "RZ_RX": ("rz, rx"),
     "RY_RZ_RX": ("ry", "rz", "rx"),
     "RX_RY_RZ": ("rx", "ry", "rz"),
     "RZ_RY_RX": ("rz", "ry", "rx"),
@@ -230,97 +232,385 @@ def build_experiment_plan() -> List[ExperimentConfig]:
     """
     configs: List[ExperimentConfig] = []
 
-    # Current best baseline from your CSV:
-    # 5 layers, brickwork_alternating, 3 trainable rotations, RY encoding.
+    # # Current best baseline from your CSV:
+    # # 5 layers, brickwork_alternating, 3 trainable rotations, RY encoding.
+    # def base(**kwargs) -> ExperimentConfig:
+    #     values = dict(
+    #         lr=0.02,
+    #         batch_size=64,
+    #         num_epochs=200,
+    #         patience=50,
+    #         num_layers=5,
+    #         entangler="brickwork_alternating",
+    #         measured_qubit=0,
+    #         seed=0,
+    #         rotation_order="RY_RZ_RX",
+    #         encoding_mode="RY",
+    #         use_initial_h=False,
+    #         measurement_basis="Z",
+    #         reupload_data=True,
+    #         init_scale=0.01,
+    #         class_weight_1_multiplier=1.0,
+    #     )
+    #     values.update(kwargs)
+    #     return ExperimentConfig(**values)
+
+    # ##############changing one thing at a time from best arch so far (after combine the best changes) ##################
+    # # 1) Measured-qubit search on the best architecture.
+    # # q0 and q1 already looked best, so they appear first.
+    # for mq in [0, 1, 3, 4, 2, 5, 6, 7]:
+    #     configs.append(base(measured_qubit=mq))
+
+    # # 2) Seed search for the best measured qubits seen so far.
+    # for mq in [0]:
+    #     for seed in [1, 2, 3, 4, 5, 6, 7, 8, 9]:
+    #         configs.append(base(measured_qubit=mq, seed=seed))
+
+    # # 3) Learning-rate tuning around the best architecture.
+    # for lr in [0.02, 0.015, 0.01, 0.025, 0.03, 0.005]:
+    #     for mq in [0]:
+    #         configs.append(base(lr=lr, measured_qubit=mq))
+
+    # # 5) Encoding variants. These add depth but no trainable parameters.
+    # for encoding in ["RY_RZ", "RX_RY_RZ"]:
+    #     for lr in [0.015, 0.01, 0.02]:
+    #         for mq in [0]:
+    #             configs.append(base(encoding_mode=encoding, lr=lr, measured_qubit=mq, num_epochs=200, patience=60))
+
+    # # 8) Rotation-order variants. Same number of parameters, different noncommuting order.
+    # for rot in ["RX_RY_RZ", "RZ_RY_RX", "RY_RX_RZ"]:
+    #     for mq in [0]:
+    #         configs.append(base(rotation_order=rot, measured_qubit=mq))
+
+    # # 6) Measurement basis. X basis adds H right before the one-qubit measurement.
+    # for mq in [0]:
+    #     configs.append(base(measurement_basis="X", measured_qubit=mq))
+
+    # # 7) Initial H layer. This starts each qubit in superposition before encoding.
+    # for mb in ["Z", "X"]:
+    #     for mq in [0]:
+    #         configs.append(base(use_initial_h=True, measurement_basis=mb, measured_qubit=mq))
+
+
+    # # 9) CZ-based entanglement variants. CZ is allowed and sometimes behaves differently.
+    # for ent in ["cz_brickwork_alternating", "cz_brickwork", "cz_chain_alternating", "cz_chain"]:
+    #     for mq in [0]:
+    #         configs.append(base(entangler=ent, measured_qubit=mq))
+
+    
+    # # 11) A few class-weight nudges for the best family.
+    # # If minority-class recall is weak, these can help balanced accuracy.
+    # for mult in [1.1, 1.2, 0.9]:
+    #     for mq in [0]:
+    #         configs.append(base(class_weight_1_multiplier=mult, measured_qubit=mq))
+
+    # ############# end of changing one at a time ######################
+
+    # #######now covering bases ########################
+
+    # # 4) Slightly deeper brickwork_alternating models.
+    # # These may or may not pass the depth rule; the script checks before training.
+    # for lr, batch in [(0.01, 64), (0.015, 64), (0.01, 128), (0.005, 64)]:
+    #     for mq in [0]:
+    #         configs.append(base(num_layers=6, lr=lr, batch_size=batch, measured_qubit=mq, num_epochs=250, patience=75))
+
+    # # 10) Two-rotation simpler variants. They may generalize better even if less expressive.
+    # for ent in ["brickwork_alternating", "brickwork", "chain", "chain_alternating"]:
+    #     for layers in [5, 6]:
+    #         for mq in [0]:
+    #             configs.append(base(num_layers=layers, entangler=ent, rotation_order="RY_RZ", lr=0.02, measured_qubit=mq))
+
+
+    ######### you can comment out above and plan custum experiments below ####################
+    # Current strongest known architecture from run 30:
+    # 5 layers, brickwork_alternating, RY encoding,
+    # RY_RX_RZ trainable rotation order, measured qubit 0.
+    #
+    # Run 30:
+    # validation_bacc = 0.78376
+    # public_exact_bacc = 0.78883
+    # public_1024_bacc = 0.78682
+    # def base(**kwargs) -> ExperimentConfig:
+    #     values = dict(
+    #         lr=0.02,
+    #         batch_size=64,
+    #         num_epochs=200,
+    #         patience=50,
+    #         num_layers=5,
+    #         entangler="brickwork_alternating",
+    #         measured_qubit=0,
+    #         seed=0,
+    #         rotation_order="RY_RX_RZ",
+    #         encoding_mode="RY",
+    #         use_initial_h=False,
+    #         measurement_basis="Z",
+    #         reupload_data=True,
+    #         init_scale=0.01,
+    #         class_weight_1_multiplier=1.0,
+    #     )
+    #     values.update(kwargs)
+    #     return ExperimentConfig(**values)
+
+    # ###############################################################################
+    # # ROUND 1: COMBINE THE BEST CHANGES FOUND SO FAR
+    # ###############################################################################
+
+    # # 1) Combine run 30's stronger rotation order with:
+    # #    - the stronger learning-rate region from runs 8 and 20
+    # #    - the lower class weight that improved validation and shot performance
+    # #
+    # # Priority order:
+    # #   lr=0.0275, cw=0.95 is the predicted sweet spot.
+    # #   lr=0.025 was strongest for validation.
+    # #   lr=0.03 was strongest on the public evaluation.
+    # #
+    # # All of these combinations are new under rotation_order="RY_RX_RZ".
+    # lr_class_weight_combinations = [
+    #     # Highest-priority combinations
+    #     (0.0275, 0.95),
+    #     (0.0250, 0.95),
+    #     (0.0300, 0.95),
+
+    #     # Test the previously successful 0.90 multiplier
+    #     (0.0275, 0.90),
+    #     (0.0250, 0.90),
+    #     (0.0300, 0.90),
+
+    #     # Controls with the original class weight
+    #     (0.0275, 1.00),
+    #     (0.0250, 1.00),
+    #     (0.0300, 1.00),
+    # ]
+
+    # for lr, mult in lr_class_weight_combinations:
+    #     configs.append(
+    #         base(
+    #             lr=lr,
+    #             class_weight_1_multiplier=mult,
+    #         )
+    #     )
+
+
+    # ###############################################################################
+    # # ROUND 2: CHECK WHETHER THE PREDICTED BEST COMBINATION IS SEED-ROBUST
+    # ###############################################################################
+
+    # # 2) Test the predicted best combined configuration across seeds.
+    # #
+    # # Seed 0 is already included in Round 1, so only add seeds 1-9 here.
+    # # This determines whether an improvement is real or caused by one lucky
+    # # initialization.
+    # for seed in [1, 2, 3, 4, 5, 6, 7, 8, 9]:
+    #     configs.append(
+    #         base(
+    #             lr=0.0275,
+    #             class_weight_1_multiplier=0.95,
+    #             seed=seed,
+    #         )
+    #     )
+
+
+    # ###############################################################################
+    # # ROUND 3: TEST THE INITIAL-H / X-MEASUREMENT INTERACTION
+    # ###############################################################################
+
+    # # 3) X measurement alone was weak, and initial H with Z measurement was weak.
+    # # However, initial H together with X measurement performed well.
+    # #
+    # # Test that interaction with the stronger RY_RX_RZ rotation order and the
+    # # promising learning-rate/class-weight combinations.
+    # hx_combinations = [
+    #     (0.0275, 0.95),
+    #     (0.0250, 0.90),
+    #     (0.0300, 0.90),
+    #     (0.0300, 0.95),
+    # ]
+
+    # for lr, mult in hx_combinations:
+    #     configs.append(
+    #         base(
+    #             lr=lr,
+    #             class_weight_1_multiplier=mult,
+    #             use_initial_h=True,
+    #             measurement_basis="X",
+    #         )
+    #     )
+
+
+    # ###############################################################################
+    # # ROUND 4: TEST A SLIGHTLY SMALLER CIRCUIT
+    # ###############################################################################
+
+    # # 4) Six layers generally performed worse than five layers.
+    # # Test whether four layers improve generalization and trainability.
+    # #
+    # # Keep the stronger RY_RX_RZ rotation order and only test the most promising
+    # # optimization settings.
+    # four_layer_combinations = [
+    #     (0.0275, 0.95),
+    #     (0.0250, 0.90),
+    #     (0.0300, 0.95),
+    # ]
+
+    # for lr, mult in four_layer_combinations:
+    #     configs.append(
+    #         base(
+    #             num_layers=4,
+    #             lr=lr,
+    #             class_weight_1_multiplier=mult,
+    #         )
+    #     )
+
+
+    # ###############################################################################
+    # # ROUND 5: SMALL LOCAL SEARCH AROUND THE PREDICTED BEST CONFIGURATION
+    # ###############################################################################
+
+    # # 5) Initialization-scale search.
+    # #
+    # # init_scale=0.01 remains the control and is already tested above.
+    # # Test one smaller and one larger initialization scale.
+    # for init_scale in [0.005, 0.02]:
+    #     configs.append(
+    #         base(
+    #             lr=0.0275,
+    #             class_weight_1_multiplier=0.95,
+    #             init_scale=init_scale,
+    #         )
+    #     )
+
+
+    # # 6) Batch-size search.
+    # #
+    # # batch_size=64 remains the control and is already tested above.
+    # # A smaller batch may provide useful gradient noise, while a larger batch may
+    # # make training more stable.
+    # for batch_size in [32, 128]:
+    #     configs.append(
+    #         base(
+    #             lr=0.0275,
+    #             batch_size=batch_size,
+    #             class_weight_1_multiplier=0.95,
+    #         )
+    #     )
+
+    #######################new plan starts here#################################
+    # New base architecture: combo 24.
     def base(**kwargs) -> ExperimentConfig:
         values = dict(
-            lr=0.02,
+            lr=0.03,
             batch_size=64,
             num_epochs=200,
             patience=50,
-            num_layers=5,
+            num_layers=4,
             entangler="brickwork_alternating",
             measured_qubit=0,
             seed=0,
-            rotation_order="RY_RZ_RX",
+            rotation_order="RY_RX_RZ",
             encoding_mode="RY",
             use_initial_h=False,
             measurement_basis="Z",
             reupload_data=True,
             init_scale=0.01,
-            class_weight_1_multiplier=1.0,
+            class_weight_1_multiplier=0.95,
         )
         values.update(kwargs)
         return ExperimentConfig(**values)
 
-    ##############changing one thing at a time from best arch so far (after combine the best changes) ##################
-    # 1) Measured-qubit search on the best architecture.
-    # q0 and q1 already looked best, so they appear first.
-    for mq in [0, 1, 3, 4, 2, 5, 6, 7]:
-        configs.append(base(measured_qubit=mq))
 
-    # 2) Seed search for the best measured qubits seen so far.
-    for mq in [0]:
-        for seed in [1, 2, 3, 4, 5, 6, 7, 8, 9]:
-            configs.append(base(measured_qubit=mq, seed=seed))
+    ############## WAVE 1: COMBINE THE TWO BEST ARCHITECTURES ##################
 
-    # 3) Learning-rate tuning around the best architecture.
-    for lr in [0.02, 0.015, 0.01, 0.025, 0.03, 0.005]:
-        for mq in [0]:
-            configs.append(base(lr=lr, measured_qubit=mq))
+    # 1) Highest-priority crossover:
+    # Combine the old best rotation order with the new best four-layer circuit.
+    configs.append(
+        base(
+            rotation_order="RY_RZ_RX",
+            class_weight_1_multiplier=0.95,
+        )
+    )
 
-    # 5) Encoding variants. These add depth but no trainable parameters.
-    for encoding in ["RY_RZ", "RX_RY_RZ"]:
-        for lr in [0.015, 0.01, 0.02]:
-            for mq in [0]:
-                configs.append(base(encoding_mode=encoding, lr=lr, measured_qubit=mq, num_epochs=200, patience=60))
-
-    # 8) Rotation-order variants. Same number of parameters, different noncommuting order.
-    for rot in ["RX_RY_RZ", "RZ_RY_RX", "RY_RX_RZ"]:
-        for mq in [0]:
-            configs.append(base(rotation_order=rot, measured_qubit=mq))
-
-    # 6) Measurement basis. X basis adds H right before the one-qubit measurement.
-    for mq in [0]:
-        configs.append(base(measurement_basis="X", measured_qubit=mq))
-
-    # 7) Initial H layer. This starts each qubit in superposition before encoding.
-    for mb in ["Z", "X"]:
-        for mq in [0]:
-            configs.append(base(use_initial_h=True, measurement_basis=mb, measured_qubit=mq))
+    configs.append(
+        base(
+            rotation_order="RY_RZ_RX",
+            class_weight_1_multiplier=1.00,
+        )
+    )
 
 
-    # 9) CZ-based entanglement variants. CZ is allowed and sometimes behaves differently.
-    for ent in ["cz_brickwork_alternating", "cz_brickwork", "cz_chain_alternating", "cz_chain"]:
-        for mq in [0]:
-            configs.append(base(entangler=ent, measured_qubit=mq))
+    ############## WAVE 1B: FINISH THE CLASS-WEIGHT SEARCH ##################
 
-    
-    # 11) A few class-weight nudges for the best family.
-    # If minority-class recall is weak, these can help balanced accuracy.
-    for mult in [1.1, 1.2, 0.9]:
-        for mq in [0]:
-            configs.append(base(class_weight_1_multiplier=mult, measured_qubit=mq))
-
-    ############# end of changing one at a time ######################
-
-    #######now covering bases ########################
-
-    # 4) Slightly deeper brickwork_alternating models.
-    # These may or may not pass the depth rule; the script checks before training.
-    for lr, batch in [(0.01, 64), (0.015, 64), (0.01, 128), (0.005, 64)]:
-        for mq in [0]:
-            configs.append(base(num_layers=6, lr=lr, batch_size=batch, measured_qubit=mq, num_epochs=250, patience=75))
-
-    # 10) Two-rotation simpler variants. They may generalize better even if less expressive.
-    for ent in ["brickwork_alternating", "brickwork", "chain", "chain_alternating"]:
-        for layers in [5, 6]:
-            for mq in [0]:
-                configs.append(base(num_layers=layers, entangler=ent, rotation_order="RY_RZ", lr=0.02, measured_qubit=mq))
+    # Run 24 still has higher class-1 recall than class-0 recall.
+    # Hold everything else fixed and finish the local weight search.
+    for cw1m in (0.90, 0.925, 0.975, 1.00):
+        configs.append(
+            base(
+                class_weight_1_multiplier=cw1m,
+            )
+        )
 
 
-    ######### you can comment out above and plan custum experiments below ####################
-    
+    ############## WAVE 1C: SMALL LEARNING-RATE STEP ##################
+
+    # 0.03 was clearly better than 0.025 and 0.0275 for four layers.
+    # Test one slightly higher value without making a large jump.
+    configs.append(
+        base(
+            lr=0.0325,
+        )
+    )
+
+
+    ############## WAVE 1D: MEASUREMENT-QUBIT CROSSOVER ##################
+
+    # q0 and q1 previously looked strongest.
+    # Test q1 specifically on the new four-layer architecture.
+    configs.append(
+        base(
+            measured_qubit=1,
+        )
+    )
+
+
+    ############## WAVE 1E: TRANSFER THE TWO BEST SEEDS ##################
+
+    # Seeds 7 and 8 were the strongest seeds in the five-layer sweep.
+    # Check whether that advantage transfers to four layers.
+    configs.append(base(seed=7))
+    configs.append(base(seed=8))
+
+
+    ############## WAVE 1F: NEW TWO-ROTATION ARCHITECTURE ##################
+
+    # The four-layer result suggests that reducing unnecessary capacity helps.
+    #
+    # These circuits use only two trainable rotations per qubit.
+    # Five and six layers provide more data reuploads and entanglement while
+    # keeping the parameter count controlled.
+    #
+    # Approximate parameter counts:
+    # 4 layers x 2 rotations: 65 parameters
+    # 5 layers x 2 rotations: 81 parameters
+    # 6 layers x 2 rotations: 97 parameters
+    #
+    # The six-layer version therefore has approximately the same parameter
+    # count as run 24, but has two additional data-reupload blocks.
+    #
+    # Use this section only if rotation_order accepts two-axis strings.
+
+    for layers in (4, 5, 6):
+        configs.append(
+            base(
+                num_layers=layers,
+                rotation_order="RX_RZ",
+            )
+        )
+
+        configs.append(
+            base(
+                num_layers=layers,
+                rotation_order="RZ_RX",
+            )
+        )
 
     return dedupe_configs(configs)
 

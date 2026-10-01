@@ -1,0 +1,5 @@
+Training and early stopping use only the training portion of public_train.csv.
+Threshold selection uses only the validation portion of public_train.csv.
+public_test.csv is used only for final reporting after model selection.
+Raw features are inserted directly as circuit angles without preprocessing.
+No data augmentation is performed.

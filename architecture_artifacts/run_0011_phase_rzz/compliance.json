@@ -1,0 +1,21 @@
+{
+  "rules_respected": true,
+  "rule_violation": "no",
+  "num_qubits": 8,
+  "logical_layers": 4,
+  "depth": 28,
+  "two_qubit_gates": 32,
+  "measurement_count": 1,
+  "measured_qubit": 0,
+  "num_trainable_parameters": 82,
+  "gate_counts": {
+    "cx": 32,
+    "h": 8,
+    "measure": 1,
+    "rx": 32,
+    "ry": 33,
+    "rz": 49
+  },
+  "shots": 1024,
+  "decomposition_note": "All operations in this report are final allowed primitives. RZZ interactions were decomposed to CX-RZ-CX before counting."
+}

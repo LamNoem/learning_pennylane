@@ -1,0 +1,14 @@
+{
+  "epochs_run": 200,
+  "threshold": 0.5485129029732987,
+  "best_val_bal_acc": 0.7391248668332102,
+  "val_recall_0": 0.7524972253052165,
+  "val_recall_1": 0.725752508361204,
+  "public_bal_acc_exact": 0.7471448153911696,
+  "public_recall_0": 0.7747447847314691,
+  "public_recall_1": 0.7195448460508701,
+  "shot_bacc_mean": 0.7432239388089419,
+  "shot_bacc_std": 0.0013781152415092523,
+  "shot_bacc_min": 0.7410151034675765,
+  "shot_bacc_max": 0.7451367832626556
+}

@@ -1,0 +1,17 @@
+{
+  "lr": 0.03,
+  "batch_size": 64,
+  "num_epochs": 200,
+  "patience": 50,
+  "num_layers": 5,
+  "entangler": "brickwork_alternating",
+  "measured_qubit": 0,
+  "seed": 0,
+  "rotation_order": "RY_RZ_RX",
+  "encoding_mode": "RY",
+  "use_initial_h": false,
+  "measurement_basis": "Z",
+  "reupload_data": true,
+  "init_scale": 0.01,
+  "class_weight_1_multiplier": 1.0
+}
